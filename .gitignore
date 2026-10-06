@@ -1,0 +1,77 @@
+# --- Secrets / local env ---
+.env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+
+# --- Python ---
+.venv/
+venv/
+env/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.ipynb_checkpoints/
+
+# --- ML model weights (auto-download on first run) ---
+*.pt
+*.pth
+*.onnx
+*.engine
+*.mlmodel
+*.pdparams
+*.pdiparams
+*.pdmodel
+# Keep small sample image if present
+!src/sample_bib.jpg
+
+# --- OCR / cache dumps ---
+**/inference_model/
+**/official_models/
+.paddlex/
+paddleocr/
+runs/
+wandb/
+ultralytics/
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+temp/
+.cache/
+*.tmp
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Generated / local assets (optional heavy) ---
+doc/pptx_assets/*.png
+# Keep committed diagrams used by PPTX rebuild if desired:
+# (jpg diagrams in doc/pptx_assets are OK to commit)
+
+# --- Local test dumps ---
+src/testdata/private/
+*.zip
+*.7z

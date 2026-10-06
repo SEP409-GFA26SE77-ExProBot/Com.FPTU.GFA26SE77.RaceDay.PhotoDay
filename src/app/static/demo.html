@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RaceDay OCR Demo</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #06b6d4;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #164e63 0%, var(--bg) 45%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 28px;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    h1 { margin: 0 0 6px; font-size: 2rem; letter-spacing: -0.03em; }
+    .sub { color: var(--muted); margin-bottom: 22px; }
+    .grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: color-mix(in srgb, var(--card) 92%, black);
+      border: 1px solid rgba(148,163,184,.2);
+      border-radius: 16px;
+      padding: 18px;
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; text-transform: uppercase; letter-spacing: .06em; }
+    input, textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid rgba(148,163,184,.25);
+      background: #0b1220;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    button {
+      margin-top: 14px;
+      width: 100%;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #0891b2, #06b6d4);
+      color: #042f2e;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    button:disabled { opacity: .55; cursor: wait; }
+    .preview {
+      margin-top: 12px;
+      min-height: 220px;
+      border-radius: 12px;
+      border: 1px dashed rgba(148,163,184,.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: #0b1220;
+      color: var(--muted);
+    }
+    .preview img { max-width: 100%; max-height: 320px; display: block; }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .ok { background: rgba(16,185,129,.15); color: var(--ok); }
+    .warn { background: rgba(245,158,11,.15); color: var(--warn); }
+    .bad { background: rgba(239,68,68,.15); color: var(--bad); }
+    .info { background: rgba(6,182,212,.15); color: var(--accent); }
+    pre {
+      margin: 12px 0 0;
+      background: #0b1220;
+      border-radius: 12px;
+      padding: 12px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.45;
+      max-height: 360px;
+      border: 1px solid rgba(148,163,184,.15);
+    }
+    .steps { color: var(--muted); font-size: 13px; margin-top: 10px; }
+    .steps b { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>RaceDay · OCR BIB Demo</h1>
+    <p class="sub">YOLO tìm người → OCR chỉ vùng ngực/BIB (không quét cả watermark). Đông người = nhiều ROI. Hard refresh sau khi restart server.</p>
+
+    <div class="grid">
+      <section class="card">
+        <div>
+          <span class="pill info" id="healthPill">checking…</span>
+          <span class="pill" id="mockPill">—</span>
+        </div>
+        <label>Ảnh runner (JPG/PNG) — BIB càng rõ càng tốt</label>
+        <input id="file" type="file" accept="image/*" />
+        <div class="preview" id="preview">Chọn ảnh để preview</div>
+        <label>Event ID</label>
+        <input id="eventId" value="funrun-21km-2027" />
+        <label>Roster BIB (để [] khi test ảnh lạ — nếu điền sai sẽ chặn auto-tag)</label>
+        <input id="roster" value="[]" />
+        <label><input id="skipBlur" type="checkbox" checked /> Skip blur gate</label>
+        <label><input id="force" type="checkbox" checked /> Force (bỏ qua duplicate khi upload lại cùng ảnh)</label>
+        <button id="runBtn">Chạy OCR thật</button>
+        <p class="steps">
+          Xem <b>tags</b> (BIB lọc) và <b>raw_ocr</b> (mọi chữ Paddle đọc được, kể cả biển QC).
+        </p>
+      </section>
+
+      <section class="card">
+        <h2 style="margin:0 0 8px;font-size:1.1rem;">Kết quả</h2>
+        <div id="statusLine">Chưa chạy.</div>
+        <div id="rawLine" style="margin-top:10px;color:var(--muted);font-size:13px;"></div>
+        <pre id="out">{}</pre>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const runBtn = document.getElementById("runBtn");
+    const out = document.getElementById("out");
+    const statusLine = document.getElementById("statusLine");
+    const healthPill = document.getElementById("healthPill");
+    const mockPill = document.getElementById("mockPill");
+
+    function statusClass(s) {
+      if (s === "auto_tagged") return "ok";
+      if (s === "needs_review" || s === "duplicate") return "warn";
+      return "bad";
+    }
+
+    async function refreshHealth() {
+      try {
+        const r = await fetch("/healthz");
+        const j = await r.json();
+        healthPill.textContent = j.status === "ok" ? "service OK" : "down";
+        healthPill.className = "pill " + (j.status === "ok" ? "ok" : "bad");
+        if (j.ocr_mock) {
+          mockPill.textContent = "OCR_MOCK=1 (KHÔNG đọc ảnh thật)";
+          mockPill.className = "pill bad";
+        } else {
+          mockPill.textContent = "PaddleOCR thật";
+          mockPill.className = "pill ok";
+        }
+      } catch {
+        healthPill.textContent = "offline";
+        healthPill.className = "pill bad";
+      }
+    }
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      const url = URL.createObjectURL(f);
+      preview.innerHTML = `<img src="${url}" alt="preview" />`;
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const f = fileInput.files?.[0];
+      if (!f) {
+        alert("Chọn ảnh trước");
+        return;
+      }
+      runBtn.disabled = true;
+      statusLine.textContent = "Đang xử lý…";
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("event_id", document.getElementById("eventId").value || "demo");
+      fd.append("roster_bibs", document.getElementById("roster").value || "[]");
+      fd.append("skip_blur_gate", document.getElementById("skipBlur").checked ? "true" : "false");
+      fd.append("force", document.getElementById("force").checked ? "true" : "false");
+      try {
+        const r = await fetch("/v1/ocr/jobs/upload", {
+          method: "POST",
+          headers: { "X-Service-Key": "dev-ocr-key-change-me" },
+          body: fd,
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(JSON.stringify(j));
+        const result = j.result || j;
+        const st = result.status || j.status;
+        const engine = (result.engine && result.engine.name) || "?";
+        statusLine.innerHTML = `<span class="pill ${statusClass(st)}">${st}</span>
+          engine: <b>${engine}</b>
+          · latency: <b>${result.latency_ms ?? "?"} ms</b><br/>
+          tags: <b>${(result.tags || []).map(t => t.bib + " (" + Math.round(t.confidence * 100) + "%)").join(", ") || "—"}</b>`;
+        const raw = result.raw_ocr || [];
+        document.getElementById("rawLine").innerHTML = raw.length
+          ? "raw_ocr: " + raw.map(x => `<code>${x.text}</code> ${Math.round((x.confidence||0)*100)}%`).join(" · ")
+          : "raw_ocr: (trống)";
+        out.textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        statusLine.innerHTML = `<span class="pill bad">error</span>`;
+        document.getElementById("rawLine").textContent = "";
+        out.textContent = String(e);
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+
+    refreshHealth();
+  </script>
+</body>
+</html>
