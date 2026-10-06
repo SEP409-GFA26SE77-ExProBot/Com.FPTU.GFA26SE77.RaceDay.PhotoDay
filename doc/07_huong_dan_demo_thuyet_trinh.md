@@ -95,7 +95,8 @@ decode → dedupe → preprocess → blur gate
 | `_bib_bands` ~L102–131 | 3 dải: **chest / waist / hips** (bib có thể ở quần) |
 | `offset_candidates_bbox` | Đưa bbox crop về tọa độ ảnh gốc |
 
-**Công nghệ:** Ultralytics **YOLOv8n** (nano) — nhanh trên CPU, đủ detect người.
+**Công nghệ:** weights **`yolov8n.pt`** (kiến trúc YOLOv8 nano) qua package Ultralytics — nhanh CPU.  
+Docs Ultralytics có thể hiện YOLO26: đó là model mới hơn, **không** phải mặc định repo (`YOLO_MODEL=yolov8n.pt`).
 
 | Không dùng | Lý do |
 |---|---|

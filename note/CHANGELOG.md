@@ -4,6 +4,18 @@ Mọi lần **add / sửa / xóa** rule, doc, hoặc source đều ghi tại đ�
 
 ---
 
+## 2026-10-06 — Sửa lệch version docs (YOLOv8 vs YOLO26, Paddle 3.x vs v2.9)
+
+### Sửa
+- `README.md`: bảng **pin phiên bản**; phân biệt weights `yolov8n.pt` vs package Ultralytics vs YOLO26 trên docs
+- Đổi link Paddle từ `v2.9/inference_args` → pipeline/module **version3.x**
+- `rule_design/02_…`, `doc/07_…`, `.env.example`: ghi chú khớp
+
+### Lý do
+User phát hiện click link docs hiện YOLO26 / cấu hình không khớp code.
+
+---
+
 ## 2026-10-06 — README full + gitignore + setup máy mới
 
 ### Add / Sửa

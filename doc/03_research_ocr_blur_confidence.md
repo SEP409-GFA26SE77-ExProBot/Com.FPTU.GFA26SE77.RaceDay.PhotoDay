@@ -16,8 +16,8 @@ Cách làm này trùng hướng nền tảng lớn: AWS Textract + A2I (confiden
 
 - Output recognition có `rec_score`:  
   https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html
-- Tham số lọc theo điểm: `text_rec_score_thresh`, các `text_det_*`:  
-  https://www.paddleocr.ai/v2.9/en/ppocr/blog/inference_args.html
+- Tham số 3.x (`text_det_limit_side_len`, det/rec thresh…):  
+  https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/OCR.html
 - PP-OCRv5 train có augment **blurring / rotation / geometric** — phù hợp ảnh field:  
   https://arxiv.org/html/2507.05595
 - Tip vận hành: kiểm tra confidence thấp để review; ảnh kém nên đủ độ phân giải:  

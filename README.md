@@ -5,10 +5,22 @@ Service **độc lập** (FastAPI) nhận ảnh giải chạy → phát hiện s
 | | |
 |---|---|
 | Phase hiện tại | Standalone OCR worker (chạy được không cần WebAPI) |
-| Stack | FastAPI · YOLOv8n · PaddleOCR (PP-OCRv5 mobile) · Pillow · imagehash |
+| Stack | FastAPI · **YOLOv8n weights** (`yolov8n.pt`) qua package Ultralytics · PaddleOCR 3.x (PP-OCRv5 mobile) |
 | Demo UI | `http://127.0.0.1:8089/demo` |
 | Port mặc định | `8089` |
 | Phiên bản app | `0.3.0` (`src/app/__init__.py`) |
+
+### Pin phiên bản (đọc trước khi click docs ngoài)
+
+Site Ultralytics / Paddle thường **quảng cáo bản mới nhất** (vd YOLO26, PaddleOCR mới). Repo này **cố định** theo bảng dưới — đừng đổi model chỉ vì trang chủ docs hiện số khác.
+
+| Thành phần | Giá trị đang dùng trong code / `.env` | Ghi chú tránh nhầm |
+|---|---|---|
+| **Weights detect người** | `YOLO_MODEL=yolov8n.pt` | Đây là **kiến trúc YOLOv8 nano**, không phải “YOLO version = số package” |
+| **Package Python** | `ultralytics>=8.3` (máy dev từng chạy ~8.4.x) | Package 8.x vẫn load được `yolov8n.pt`. Docs trang chủ có thể nói YOLO11/YOLO26 — **bỏ qua** trừ khi đổi `YOLO_MODEL` có chủ đích |
+| **OCR engine** | `paddleocr>=3.0` + `paddlepaddle>=3.0` | Dùng API / docs **version3.x**, không dùng guide v2.9 làm chuẩn cấu hình |
+| **OCR models** | `PP-OCRv5_mobile_det` + `en_PP-OCRv5_mobile_rec` | Mobile (nhanh CPU), không phải server/heavy |
+| **Nguồn sự thật cấu hình** | `src/.env.example` + `src/app/core/config.py` | Luôn đối chiếu file này trước link ngoài |
 
 ---
 
@@ -146,7 +158,7 @@ File mẫu: [`src/.env.example`](src/.env.example) → copy thành `src/.env` (l
 | `OCR_DET_LIMIT_SIDE_LEN` | `1280` | Giới hạn cạnh khi detect text |
 | `OCR_WARMUP_ON_START` | `true` | Load model lúc start |
 | `YOLO_ENABLED` | `true` | Bật detect người trước OCR |
-| `YOLO_MODEL` | `yolov8n.pt` | Weights YOLO (auto-download) |
+| `YOLO_MODEL` | `yolov8n.pt` | File weights **YOLOv8n** (auto-download). Không phải YOLO26 trừ khi đổi tay |
 | `YOLO_CONF` | `0.25` | Ngưỡng conf person box |
 | `YOLO_MAX_PEOPLE` | `8` | Tối đa người/ảnh |
 | `YOLO_TORSO_PAD` | `0.08` | Pad quanh band ROI |
@@ -156,18 +168,20 @@ File mẫu: [`src/.env.example`](src/.env.example) → copy thành `src/.env` (l
 
 Đổi `.env` → **restart** uvicorn (settings được cache).
 
-### Link cấu hình engine (chính thức)
+### Link cấu hình engine (khớp version đang dùng)
 
-| Chủ đề | Link |
-|---|---|
-| PaddleOCR 3.x text recognition / score | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html |
-| PaddleOCR inference args (det/rec thresh, side len) | https://www.paddleocr.ai/v2.9/en/ppocr/blog/inference_args.html |
-| PP-OCRv5 technical report | https://arxiv.org/html/2507.05595 |
-| Ultralytics YOLOv8 predict args | https://docs.ultralytics.com/modes/predict/ |
-| Ultralytics CLI / Python YOLO | https://docs.ultralytics.com/usage/python/ |
-| FastAPI settings / deploy | https://fastapi.tiangolo.com/deployment/manually/ |
-| Uvicorn settings | https://www.uvicorn.org/settings/ |
-| Pydantic Settings env | https://docs.pydantic.dev/latest/concepts/pydantic_settings/ |
+| Chủ đề | Link đúng phiên bản repo | Tránh nhầm |
+|---|---|---|
+| **YOLOv8** model card (`yolov8n.pt`…) | https://docs.ultralytics.com/models/yolov8/ | Không lấy trang YOLO26/YOLO11 làm chuẩn trừ khi đổi weights |
+| YOLOv8 detect + predict API | https://docs.ultralytics.com/models/yolov8/#usage-examples · https://docs.ultralytics.com/modes/predict/ | Ví dụ generic có thể dùng model mới — vẫn truyền `"yolov8n.pt"` như code |
+| Ultralytics Python package | https://docs.ultralytics.com/usage/python/ | Version package ≠ tên kiến trúc weights |
+| **PaddleOCR 3.x** OCR pipeline (`text_det_limit_side_len`, …) | https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/OCR.html | **Thay** cho guide v2.9 cũ |
+| PaddleOCR 3.x text recognition / score | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html | |
+| PaddleOCR 3.x text detection module | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_detection.html | Tham số `limit_side_len` / `limit_type` |
+| PP-OCRv5 technical report | https://arxiv.org/html/2507.05595 | |
+| FastAPI deploy | https://fastapi.tiangolo.com/deployment/manually/ | |
+| Uvicorn | https://www.uvicorn.org/settings/ | |
+| Pydantic Settings | https://docs.pydantic.dev/latest/concepts/pydantic_settings/ | |
 
 ---
 
@@ -344,15 +358,16 @@ Orchestrator: `src/app/services/pipeline.py`.
 
 ---
 
-### 7.4 Person detection — YOLOv8n
+### 7.4 Person detection — YOLOv8n (`yolov8n.pt`)
 
 | | |
 |---|---|
 | **Ý tưởng** | Object detection 1-stage tìm box người trong đám đông |
-| **Cách chạy** | Ultralytics YOLO predict, class COCO `person=0`, sort theo diện tích, lấy ≤ `YOLO_MAX_PEOPLE` |
-| **Cấu hình** | `YOLO_ENABLED`, `YOLO_MODEL`, `YOLO_CONF`, `YOLO_MAX_PEOPLE` |
+| **Cách chạy** | `YOLO("yolov8n.pt").predict(...)`, class COCO `person=0`, sort theo diện tích, lấy ≤ `YOLO_MAX_PEOPLE` |
+| **Cấu hình** | `YOLO_ENABLED`, `YOLO_MODEL=yolov8n.pt`, `YOLO_CONF`, `YOLO_MAX_PEOPLE` |
 | **File** | `services/detector.py` |
-| **Nguồn / cấu hình** | [Ultralytics YOLOv8](https://docs.ultralytics.com/models/yolov8/) · [Predict arguments](https://docs.ultralytics.com/modes/predict/) · COCO classes |
+| **Nguồn / cấu hình** | [YOLOv8 docs](https://docs.ultralytics.com/models/yolov8/) (bảng có `yolov8n.pt`) · [Predict mode](https://docs.ultralytics.com/modes/predict/) |
+| **Lưu ý docs** | Trang chủ Ultralytics có thể hiện **YOLO26** — đó là model family mới hơn; **repo này chưa dùng**. Chỉ đổi khi đổi `YOLO_MODEL` có chủ đích. |
 
 ---
 
@@ -376,7 +391,8 @@ Orchestrator: `src/app/services/pipeline.py`.
 | **Cách chạy** | `PaddleOCR(det=PP-OCRv5_mobile_det, rec=en_PP-OCRv5_mobile_rec)` trên mỗi crop; tắt doc orientation/unwarp; `enable_mkldnn=False` (ổn định Windows) |
 | **Cấu hình** | `OCR_DET_MODEL`, `OCR_REC_MODEL`, `OCR_DET_LIMIT_SIDE_LEN`, `OCR_MOCK`, `OCR_WARMUP_ON_START` |
 | **File** | `services/ocr_engine.py` |
-| **Nguồn / cấu hình** | [PaddleOCR docs](https://www.paddleocr.ai/) · [Text recognition module](https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html) · [Inference args](https://www.paddleocr.ai/v2.9/en/ppocr/blog/inference_args.html) · [PP-OCRv5 report](https://arxiv.org/html/2507.05595) |
+| **Nguồn / cấu hình** | [OCR pipeline 3.x](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/OCR.html) · [Text recognition](https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html) · [Text detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_detection.html) · [PP-OCRv5 report](https://arxiv.org/html/2507.05595) |
+| **Lưu ý docs** | Không dùng trang **v2.9 inference_args** làm chuẩn — API 3.x dùng tên `text_det_limit_side_len` (khớp `OCR_DET_LIMIT_SIDE_LEN` trong `.env`) |
 | **Quan trọng** | `rec_score` cao ≠ đúng BIB (watermark có thể 0.99) |
 
 Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_models\` và YOLO cache Ultralytics.
@@ -415,8 +431,10 @@ Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_mo
 | **BIB** | Số báo danh gắn trên áo/quần runner |
 | **OCR** | Optical Character Recognition — nhận dạng chữ trên ảnh |
 | **ROI** | Region of Interest — vùng cắt để OCR (torso bands) |
-| **YOLO** | You Only Look Once — mô hình detect object |
-| **YOLOv8n** | Bản nano (nhỏ/nhanh) của YOLOv8 |
+| **YOLO** | You Only Look Once — họ mô hình detect object |
+| **YOLOv8n** | Bản **nano** của kiến trúc **YOLOv8** — file `yolov8n.pt` (đang dùng) |
+| **ultralytics (package)** | Thư viện Python chạy YOLO; số version package (8.4.x) ≠ “đang dùng YOLO26” |
+| **YOLO26 / YOLO11** | Model family mới hơn trên docs Ultralytics — **chưa** phải cấu hình mặc định repo này |
 | **COCO** | Dataset chuẩn; class `0` = person |
 | **PaddleOCR / PP-OCR** | Engine OCR của PaddlePaddle |
 | **det / rec** | Detection (tìm chữ) / Recognition (đọc chữ) |

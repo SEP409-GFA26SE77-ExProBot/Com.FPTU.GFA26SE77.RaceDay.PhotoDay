@@ -19,8 +19,9 @@ Report 2 Risk #4 yêu cầu:
 
 | Chủ đề | Nguồn | Link |
 |---|---|---|
-| PaddleOCR `rec_score` / text recognition | PaddleOCR docs | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html |
-| Tham số `text_rec_score_thresh`, det thresh | PaddleOCR inference args | https://www.paddleocr.ai/v2.9/en/ppocr/blog/inference_args.html |
+| PaddleOCR `rec_score` / text recognition | PaddleOCR 3.x module | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html |
+| Tham số `text_det_limit_side_len`, det/rec thresh | PaddleOCR 3.x OCR pipeline | https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/OCR.html |
+| Text detection (`limit_side_len` / `limit_type`) | PaddleOCR 3.x det module | https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_detection.html |
 | Augment blur/rotate trong PP-OCRv5 | PaddleOCR 3.0 Technical Report | https://arxiv.org/html/2507.05595 |
 | Tip: check confidence, ảnh ≥300 DPI khi kém | PaddleOCR skill tips | https://github.com/PaddlePaddle/PaddleOCR/blob/1903e73d/skills/paddleocr-text-recognition/SKILL.md |
 | Confidence + human review khi thấp | AWS Textract best practices | https://docs.aws.amazon.com/textract/latest/dg/textract-best-practices.html |
