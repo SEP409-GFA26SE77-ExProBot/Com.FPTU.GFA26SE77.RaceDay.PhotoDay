@@ -132,7 +132,7 @@ Docs Ultralytics có thể hiện YOLO26: đó là model mới hơn, **không** 
 | Nhóm dòng | Thuật ngữ |
 |---|---|
 | `_BLOCK_SUBSTR` ~L15–25 | Blocklist watermark/sponsor (VNEXPRESS, QUYNHON…) |
-| `_BIB_FULL` regex ~L29 | Shape BIB: `[A]?` + 4–5 số + `[MF]?` |
+| `_bib_patterns()` | Shape BIB: `[A]?` + **3–6 số** (`BIB_MIN/MAX_DIGITS`) + `[MF]?` |
 | `_in_watermark_zone` ~L64–79 | Bỏ chữ góc trên / top-left |
 | `_torso_bonus` | Cộng nhẹ confidence nếu bbox vùng thân |
 | `extract_bib_candidates` | Lấy core số; bỏ year/phone |
@@ -223,7 +223,7 @@ Chỉ các knob hay nhắc khi Q&A:
 
 ### 3.7 Classify (filter + dual threshold)
 1. Bỏ watermark zone + blocklist (QUYNHON, VNEXPRESS…).
-2. Regex BIB `[A]?` + 4–5 số + `[MF]?`; bỏ năm/SĐT.
+2. Regex BIB `[A]?` + **3–6 số** (`BIB_MIN/MAX_DIGITS`) + `[MF]?`; bỏ năm/SĐT.
 3. `conf ≥ 0.85` (+ roster) → `auto_tagged`; `≥ 0.50` → `needs_review`; dưới → loại.
 
 ### 3.8 Semaphore `MAX_INFLIGHT`

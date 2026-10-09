@@ -1,44 +1,64 @@
-# Bootstrap OCR service on a fresh machine (Windows PowerShell)
+# Bootstrap OCR service (Windows PowerShell) - ASCII/English only (avoid encoding errors)
 # Usage:  cd src;  .\setup.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# Prefer UTF-8 console when available (does not require Vietnamese text in this script)
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+    $OutputEncoding = [Console]::OutputEncoding
+} catch {}
+
 Write-Host "== RaceDay OCR setup ==" -ForegroundColor Cyan
 
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) {
-    Write-Error "Chưa có Python trong PATH. Cài Python 3.10–3.12 từ https://www.python.org/downloads/ (tick Add to PATH)."
+$pyCmd = $null
+foreach ($name in @("python", "py")) {
+    $c = Get-Command $name -ErrorAction SilentlyContinue
+    if ($c) { $pyCmd = $c.Source; break }
+}
+if (-not $pyCmd) {
+    Write-Error "Python not found in PATH. Install Python 3.10-3.12 from https://www.python.org/downloads/ (check 'Add to PATH')."
 }
 
-$ver = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-Write-Host "Python: $ver"
-$maj, $min = $ver.Split(".") | ForEach-Object { [int]$_ }
+# Resolve version (support "py -3")
+$verLine = & $pyCmd -c "import sys; print('%d.%d' % (sys.version_info.major, sys.version_info.minor))"
+Write-Host "Python: $verLine  ($pyCmd)"
+$parts = $verLine.Trim().Split(".")
+$maj = [int]$parts[0]
+$min = [int]$parts[1]
 if ($maj -ne 3 -or $min -lt 10 -or $min -gt 12) {
-    Write-Warning "Khuyến nghị Python 3.10–3.12 (PaddleOCR ổn định nhất). Đang dùng $ver."
+    Write-Warning "Recommended Python 3.10-3.12 for PaddleOCR. Current: $verLine"
 }
 
-if (-not (Test-Path ".venv")) {
+$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPython)) {
     Write-Host "Creating .venv ..."
-    python -m venv .venv
+    & $pyCmd -m venv .venv
+    if (-not (Test-Path $venvPython)) {
+        Write-Error "Failed to create .venv. Try: $pyCmd -m venv .venv"
+    }
 }
 
-$pip = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-& $pip -m pip install --upgrade pip
-Write-Host "Installing requirements (lần đầu có thể 5–15 phút)..."
-& $pip -m pip install -r requirements.txt
+Write-Host "Upgrading pip ..."
+& $venvPython -m pip install --upgrade pip
+Write-Host "Installing requirements (first run may take 5-15 minutes)..."
+& $venvPython -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "pip install failed (exit $LASTEXITCODE). Check Python version and network."
+}
 
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
     Write-Host "Created .env from .env.example"
 } else {
-    Write-Host ".env already exists — keep"
+    Write-Host ".env already exists - keeping it"
 }
 
 Write-Host ""
-Write-Host "OK. Chạy demo:" -ForegroundColor Green
+Write-Host "OK. Next:" -ForegroundColor Green
 Write-Host "  .\run_demo.ps1"
-Write-Host "Hoặc:"
+Write-Host "Or:"
 Write-Host "  .\.venv\Scripts\Activate.ps1"
 Write-Host "  uvicorn app.main:app --host 127.0.0.1 --port 8089"
 Write-Host ""
-Write-Host "Lần start đầu: tải YOLO yolov8n.pt + Paddle models (~vài trăm MB) vào cache user."
+Write-Host "First start downloads YOLO yolov8n.pt + Paddle models (~hundreds of MB) into user cache."

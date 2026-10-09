@@ -4,6 +4,44 @@ Mọi lần **add / sửa / xóa** rule, doc, hoặc source đều ghi tại đ�
 
 ---
 
+## 2026-10-09 — Setup scripts English/ASCII (teammate encoding fix)
+
+### Sửa
+- `setup.ps1`, `run_demo.ps1`, `setup.sh`, `.env.example`, `src/README.md`: messages **English only** (no Vietnamese in PS1)
+- Harder errors: pip fail, health timeout; try `python`/`py`
+
+### Lý do
+Teammate pull + `.\setup.ps1` lỗi encoding tiếng Việt trên PowerShell.
+
+---
+
+## 2026-10-09 — Multi-bib đám đông + zero-padded (009/077)
+
+### Sửa
+- Bỏ hard-cap **chỉ 2 tags**; dùng `BIB_MAX_TAGS` (mặc định 8)
+- Cho phép bib zero-pad `009`/`077` (trước reject mọi số bắt đầu `0`); vẫn chặn SĐT dài `09…`
+- Test crowd: 009,077,101,102,199,314,457
+
+### Lý do
+Screenshot demo: raw_ocr có nhiều BIB nhưng tags chỉ `102`,`101`.
+
+---
+
+## 2026-10-09 — Hỗ trợ BIB 3–6 số (fun-run 3 digit)
+
+### Sửa
+- `confidence.py`: regex BIB từ cố định 4–5 số → **`BIB_MIN_DIGITS`–`BIB_MAX_DIGITS`** (mặc định 3–6)
+- `.env.example` / `config.py` / README / doc demo: ghi cấu hình mới
+
+### Lý do
+Bạn test ảnh bib **3 số** không quét được — filter cũ chỉ nhận 4–5 digit.
+
+### Lưu ý
+- Nhiều BIB/ảnh: YOLO nhiều person + classify giữ tới 2 digit-core
+- Bib 1–2 số: đặt `BIB_MIN_DIGITS=1` (dễ nhiễu) hoặc dựa roster WebAPI
+
+---
+
 ## 2026-10-06 — Sửa lệch version docs (YOLOv8 vs YOLO26, Paddle 3.x vs v2.9)
 
 ### Sửa

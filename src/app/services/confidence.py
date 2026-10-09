@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.core.status import OcrJobStatus
 from app.services.ocr_engine import OcrCandidate
 
@@ -24,10 +25,18 @@ _BLOCK_SUBSTR = (
     "BMAI",
 )
 
-# Core bib: optional category letter + 4–5 digits + optional gender M/F
-# e.g. A80087M, 80087, 8684M, A 80183 F
-_BIB_FULL = re.compile(r"^([A-Z])?(\d{4,5})([MF])?$")
-_DIGIT_RUN = re.compile(r"\d{4,5}")
+# Core bib: optional category letter + N digits + optional gender M/F
+# Default N = 3–6 (fun-run 3 số → marathon 5–6). Env: BIB_MIN_DIGITS / BIB_MAX_DIGITS.
+
+
+def _bib_patterns() -> tuple[re.Pattern[str], re.Pattern[str]]:
+    s = get_settings()
+    lo = max(1, min(8, int(s.bib_min_digits)))
+    hi = max(lo, min(8, int(s.bib_max_digits)))
+    return (
+        re.compile(rf"^([A-Z])?(\d{{{lo},{hi}}})([MF])?$"),
+        re.compile(rf"\d{{{lo},{hi}}}"),
+    )
 
 
 @dataclass
@@ -124,7 +133,8 @@ def extract_bib_candidates(raw: str) -> list[str]:
     else:
         fixed = norm
 
-    m = _BIB_FULL.match(fixed)
+    bib_full, digit_run = _bib_patterns()
+    m = bib_full.match(fixed)
     if m:
         prefix, digits, _gender = m.group(1), m.group(2), m.group(3)
         if _reject_digit_core(digits):
@@ -136,7 +146,7 @@ def extract_bib_candidates(raw: str) -> list[str]:
 
     # Embedded digit run only if token is short overall
     if len(fixed) <= 10:
-        for dig in _DIGIT_RUN.findall(fixed):
+        for dig in digit_run.findall(fixed):
             if _reject_digit_core(dig):
                 continue
             if dig not in out:
@@ -145,20 +155,25 @@ def extract_bib_candidates(raw: str) -> list[str]:
 
 
 def _reject_digit_core(digits: str) -> bool:
-    """Drop phone/year-like cores common on VN event photos."""
+    """Drop phone/year-like cores; giữ zero-padded bib (009, 077)."""
     if not digits:
         return True
-    # Phone fragments
-    if digits.startswith("0"):
+    # SĐT dài: 09xxxxxxxx — không phải bib plate
+    if digits.startswith("0") and len(digits) >= 9:
         return True
-    # Watermark years 2024–2029 and OCR gluing "20"+"26"
+    # Zero-pad ngắn 01/02… (1–2 số sau khi có 0) quá nhiễu nếu tổng < min bib
+    # 009 / 077 / 0142 = bib thật trên áo — CHO QUA khi độ dài trong range cấu hình
+    if digits.startswith("0") and len(digits) < 3:
+        return True
+    # Watermark years 2020–2029 and OCR gluing "20"+"26"
     if digits.startswith("20") and len(digits) in {4, 5, 6}:
         return True
     return False
 
 
 def looks_like_bib(text: str) -> bool:
-    return bool(_BIB_FULL.match(normalize_alnum(text).translate(_DIGIT_FIX)))
+    bib_full, _ = _bib_patterns()
+    return bool(bib_full.match(normalize_alnum(text).translate(_DIGIT_FIX)))
 
 
 def classify(
@@ -221,13 +236,14 @@ def classify(
         if prev is None or rank > prev[1]:
             best[bib] = (bib, conf, bbox)
 
-    # Prefer longer digit cores (5-digit race bibs) over short noise
+    # Prefer higher conf; longer cores slightly prefer marathon-style when tied
     def sort_key(item: tuple[str, float, list[float]]) -> tuple:
         bib, conf, _ = item
         digits = re.sub(r"\D", "", bib)
         return (conf, len(digits), 1 if bib.isdigit() else 0)
 
-    tags = sorted(best.values(), key=sort_key, reverse=True)[:3]
+    max_tags = max(1, min(32, int(get_settings().bib_max_tags)))
+    tags = sorted(best.values(), key=sort_key, reverse=True)[:max_tags]
 
     autoable: list[tuple[str, float, list[float]]] = []
     reviewable: list[tuple[str, float, list[float]]] = []
@@ -247,19 +263,29 @@ def classify(
         else:
             reasons.append("below_review_min")
 
-    # If multiple tags, prefer single best digit-only for auto
+    # Multi-runner: giữ nhiều digit-core (tối đa bib_max_tags), bỏ bản prefix trùng core
     if autoable:
         autoable_sorted = sorted(autoable, key=sort_key, reverse=True)
-        # Auto only the best digit core to avoid QUYNHON-style multi spam
-        primary = [autoable_sorted[0]]
-        extras = [t for t in autoable_sorted[1:] if t[0].isdigit() and t[0] != primary[0][0]]
-        # multi-runner photos may have 2 digit cores
-        chosen = primary + extras[:1]
+        chosen: list[tuple[str, float, list[float]]] = []
+        seen_cores: set[str] = set()
+        for bib, conf, bbox in autoable_sorted:
+            core = re.sub(r"\D", "", bib)
+            if not core or core in seen_cores:
+                continue
+            if not bib.isdigit() and any(t[0].isdigit() and t[0] == core for t in autoable_sorted):
+                # Có bản digit-only cùng core → bỏ A80183 nếu đã có 80183
+                continue
+            seen_cores.add(core)
+            chosen.append((bib if bib.isdigit() else core, conf, bbox))
+            if len(chosen) >= max_tags:
+                break
         if reviewable:
             reasons.append("mixed_confidence")
-            return ClassifiedTags(OcrJobStatus.needs_review, chosen + reviewable, reasons, raw_texts)
+            # review thêm những core chưa có trong chosen
+            extra_rev = [t for t in reviewable if re.sub(r"\D", "", t[0]) not in seen_cores][: max(0, max_tags - len(chosen))]
+            return ClassifiedTags(OcrJobStatus.needs_review, chosen + extra_rev, reasons, raw_texts)
         return ClassifiedTags(OcrJobStatus.auto_tagged, chosen, reasons, raw_texts)
 
     if reviewable:
-        return ClassifiedTags(OcrJobStatus.needs_review, reviewable[:2], reasons, raw_texts)
+        return ClassifiedTags(OcrJobStatus.needs_review, reviewable[:max_tags], reasons, raw_texts)
     return ClassifiedTags(OcrJobStatus.no_bib, [], reasons or ["drop_guess"], raw_texts)

@@ -81,14 +81,14 @@ Chi tiết: [`doc/04_quyet_dinh_batch_vs_cam.md`](doc/04_quyet_dinh_batch_vs_cam
 
 ### Windows (khuyến nghị)
 
+> Script `setup.ps1` / `run_demo.ps1` dùng **tiếng Anh (ASCII)** để tránh lỗi encoding PowerShell khi teammate pull.
+
 ```powershell
 git clone <URL_REPO> SEP_Service_Photo
 cd SEP_Service_Photo\src
 
-# 1) Cài venv + deps + copy .env
+# If blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 .\setup.ps1
-
-# 2) Chạy server + mở demo UI
 .\run_demo.ps1
 ```
 
@@ -153,6 +153,9 @@ File mẫu: [`src/.env.example`](src/.env.example) → copy thành `src/.env` (l
 | `BLUR_MIN_VARIANCE` | `40` | Laplacian variance dưới mức → bỏ ảnh mờ |
 | `MAX_IMAGE_SIDE` | `1600` | Cạnh dài tối đa sau downscale |
 | `MAX_INFLIGHT` | `1` | Số job OCR song song / process |
+| `BIB_MIN_DIGITS` | `3` | Độ dài số BIB tối thiểu (3 = hỗ trợ fun-run 3 số) |
+| `BIB_MAX_DIGITS` | `6` | Độ dài số BIB tối đa |
+| `BIB_MAX_TAGS` | `8` | Số BIB tối đa / ảnh (đám đông nhiều runner) |
 | `OCR_DET_MODEL` | `PP-OCRv5_mobile_det` | Model detect chữ |
 | `OCR_REC_MODEL` | `en_PP-OCRv5_mobile_rec` | Model nhận dạng chữ |
 | `OCR_DET_LIMIT_SIDE_LEN` | `1280` | Giới hạn cạnh khi detect text |
@@ -404,7 +407,7 @@ Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_mo
 | | |
 |---|---|
 | **Ý tưởng** | OCR trả nhiều chữ → chỉ giữ token giống BIB; quyết định auto vs review |
-| **Cách chạy** | (1) bỏ watermark zone + blocklist slogan (2) regex `[A]?`+4–5 số+`[MF]?` (3) `conf ≥ THRESHOLD_AUTO` (+ roster) → `auto_tagged`; `≥ THRESHOLD_REVIEW_MIN` → `needs_review` |
+| **Cách chạy** | (1) bỏ watermark zone + blocklist slogan (2) regex `[A]?`+**3–6 số** (`BIB_MIN/MAX_DIGITS`)+`[MF]?` (3) `conf ≥ THRESHOLD_AUTO` (+ roster) → `auto_tagged`; `≥ THRESHOLD_REVIEW_MIN` → `needs_review` |
 | **Cấu hình** | `THRESHOLD_AUTO`, `THRESHOLD_REVIEW_MIN` · override theo event qua `PUT /v1/events/{id}/ocr-config` |
 | **File** | `services/confidence.py` |
 | **Nguồn tham chiếu nghiệp vụ** | [AWS Textract best practices — confidence](https://docs.aws.amazon.com/textract/latest/dg/textract-best-practices.html) · [ChronoTrack OCR bib tagging](https://director.chronotrack.com/hc/en-us/articles/360038745651-How-to-Use-the-On-Demand-OCR-Bib-Tagging-Service-in-CT-Live) · [RaceTagger — problem bibs](https://racetagger.cloud/guides/problem-solution/bib-detection-in-marathon-photography) |
