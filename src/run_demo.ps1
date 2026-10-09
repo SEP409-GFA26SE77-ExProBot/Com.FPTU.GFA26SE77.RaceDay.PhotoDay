@@ -8,7 +8,7 @@ $url = "http://127.0.0.1:$port/demo"
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 
 if (-not (Test-Path $python)) {
-    Write-Host "Chưa có .venv. Chạy setup trước:" -ForegroundColor Yellow
+    Write-Host "Missing .venv. Run setup first:" -ForegroundColor Yellow
     Write-Host "  .\setup.ps1"
     exit 1
 }
@@ -25,7 +25,7 @@ try {
 } catch { $already = $false }
 
 if (-not $already) {
-    Write-Host "Starting OCR on :$port (warmup YOLO+OCR lần đầu có thể 20-60s)..."
+    Write-Host "Starting OCR on :$port (warmup YOLO+OCR first time may take 20-60s)..."
     Start-Process -FilePath $python -ArgumentList @(
         "-m", "uvicorn", "app.main:app",
         "--host", "127.0.0.1",
