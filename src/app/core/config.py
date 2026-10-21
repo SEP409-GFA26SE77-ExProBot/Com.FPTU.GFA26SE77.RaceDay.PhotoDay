@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     blur_min_variance: float = 40.0
     max_image_side: int = 1600
     max_inflight: int = 1
+    # BIB digit length: 3–6 covers fun-run 3 số + marathon 4–6. 1–2 digits = nhiều nhiễu.
+    bib_min_digits: int = 3
+    bib_max_digits: int = 6
+    # Max distinct bib tags per photo (đám đông / nhiều runner).
+    bib_max_tags: int = 8
 
     ocr_det_model: str = "PP-OCRv5_mobile_det"
     ocr_rec_model: str = "en_PP-OCRv5_mobile_rec"

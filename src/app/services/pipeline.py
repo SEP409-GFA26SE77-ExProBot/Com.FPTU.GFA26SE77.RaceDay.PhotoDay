@@ -18,7 +18,7 @@ from app.core.concurrency import get_inflight_semaphore
 from app.core.config import Settings
 from app.core.status import OcrJobStatus
 from app.schemas.jobs import BibTag, CreateOcrJobRequest, OcrJobResult
-from app.services.confidence import classify, normalize_bib
+from app.services.confidence import classify
 from app.services.dedupe import check_and_register
 from app.services.detector import PersonDetector, offset_candidates_bbox
 from app.services.ocr_engine import OcrCandidate, OcrEngine
@@ -116,9 +116,11 @@ async def _run(
     candidates, yolo_meta = _ocr_on_rois(pre.image, settings)
     flags.extend(yolo_meta.get("flags", []))
 
+    # Keep roster strings as WebAPI issued them (prefix+D4); classify resolves OCR → roster.
+    roster = {(b or "").strip().upper() for b in req.roster_bibs if b and str(b).strip()}
     classified = classify(
         candidates,
-        set(normalize_bib(b) for b in req.roster_bibs if b),
+        roster,
         threshold_auto=thr_auto,
         threshold_review_min=thr_review,
         image_size=pre.image.size,
