@@ -33,7 +33,7 @@ if (-not $already) {
     Write-Host "Starting OCR on :$port (first warmup may take 20-60s)..."
     Start-Process -FilePath $python -ArgumentList @(
         "-m", "uvicorn", "app.main:app",
-        "--host", "127.0.0.1",
+        "--host", "0.0.0.0",
         "--port", "$port"
     ) -WorkingDirectory $PSScriptRoot -WindowStyle Normal
 

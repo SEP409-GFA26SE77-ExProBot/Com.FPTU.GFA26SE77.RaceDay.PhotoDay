@@ -187,7 +187,7 @@ Chỉ các knob hay nhắc khi Q&A:
 
 - `THRESHOLD_AUTO` / `THRESHOLD_REVIEW_MIN` — band auto vs review  
 - `YOLO_*` / `OCR_FULLFRAME_FALLBACK=false` — ROI strategy  
-- `MAX_INFLIGHT=1` — ổn định RAM 1 worker  
+- `MAX_INFLIGHT=2` — mặc định; khớp WebAPI `WorkerMaxParallel` (Paddle CPU thì đừng tăng bừa)  
 - `OCR_MOCK` — bật tắt đọc thật  
 
 ---

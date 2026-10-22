@@ -97,7 +97,21 @@ def _in_watermark_zone(bbox: list[float], image_size: tuple[int, int] | None) ->
     return False
 
 
+def _report_confidence(raw: float) -> float:
+    """
+    Giữ spread điểm Paddle nhưng nén đuôi cao — Paddle hay báo 0.97–1.0
+    kể cả BIB bị che một phần → tránh UI hiện ~99% (perfect data giả).
+    Soft-cap 0.95; vùng ≥0.90 bị compress nhẹ.
+    """
+    c = max(0.0, min(1.0, float(raw)))
+    if c >= 0.90:
+        # 0.90 → 0.90, 0.95 → 0.925, 1.0 → 0.95
+        c = 0.90 + (c - 0.90) * 0.5
+    return round(min(c, 0.95), 4)
+
+
 def _torso_bonus(bbox: list[float], image_size: tuple[int, int] | None) -> float:
+    """Small location prior only (≤0.04). Large bonuses were clamping everything to 100%."""
     if not bbox or len(bbox) < 4 or not image_size:
         return 0.0
     w, h = image_size
@@ -105,16 +119,14 @@ def _torso_bonus(bbox: list[float], image_size: tuple[int, int] | None) -> float
     cx = (x1 + x2) / 2.0 / max(w, 1)
     cy = (y1 + y2) / 2.0 / max(h, 1)
     bonus = 0.0
-    # Bib usually mid torso, horizontally centered-ish
     if 0.30 <= cy <= 0.78:
-        bonus += 0.06
+        bonus += 0.02
     if 0.25 <= cx <= 0.75:
-        bonus += 0.03
-    # Prefer reasonably large boxes (bib plate vs tiny noise)
+        bonus += 0.01
     box_h = abs(y2 - y1) / max(h, 1)
     if box_h >= 0.03:
-        bonus += 0.02
-    return bonus
+        bonus += 0.01
+    return min(0.04, bonus)
 
 
 def extract_bib_candidates(raw: str) -> list[str]:
@@ -245,14 +257,16 @@ def classify(
         if not bibs:
             continue
 
-        conf = float(c.confidence) + _torso_bonus(c.bbox, image_size)
-        if looks_like_bib(c.bib_raw):
-            conf = min(1.0, conf + 0.03)
-        conf = min(1.0, conf)
+        # Base = Paddle rec_score; chỉ cộng prior nhỏ — không đẩy về 1.0.
+        conf = _report_confidence(
+            float(c.confidence)
+            + _torso_bonus(c.bbox, image_size)
+            + (0.015 if looks_like_bib(c.bib_raw) else 0.0)
+        )
 
         for bib in bibs:
             # Prefer digit-only core when ranking; keep prefixed variants too.
-            prepared.append((bib, conf, c.bbox, conf + (0.01 if bib.isdigit() else 0.0)))
+            prepared.append((bib, conf, c.bbox, conf + (0.005 if bib.isdigit() else 0.0)))
 
     if skipped_wm:
         reasons.append("ignored_watermark_zone")
@@ -303,7 +317,18 @@ def classify(
     autoable: list[tuple[str, float, list[float]]] = []
     reviewable: list[tuple[str, float, list[float]]] = []
 
+    def _full_strength(token: str, roster_form: str) -> bool:
+        """Exact / đủ dài — không promote fragment 0001→50001 thành auto ở OCR service."""
+        tn = normalize_alnum(token)
+        rn = normalize_alnum(roster_form)
+        if not tn or not rn:
+            return False
+        if tn == rn:
+            return True
+        return len(tn) >= len(rn)
+
     for bib, conf, bbox in tags:
+        conf = _report_confidence(conf)
         if roster_set:
             resolved = resolve_against_roster(bib, roster_set)
             in_roster = resolved is not None
@@ -312,14 +337,21 @@ def classify(
             in_roster = True
             emit = bib
 
-        if conf >= threshold_auto and in_roster:
+        if (
+            conf >= threshold_auto
+            and in_roster
+            and _full_strength(bib, emit)
+        ):
             autoable.append((emit, conf, bbox))
         elif conf >= threshold_review_min:
-            reviewable.append((emit, conf, bbox))
+            # Forward MỌI candidate ≥ review_min lên WebAPI (kể cả ngoài roster / partial).
+            # WebAPI fused confidence + roster match mới Matched / Review / Discard.
+            # Giữ token OCR gốc (bib) để fuzzy match (vd 0001 ↔ 50001).
+            reviewable.append((bib, conf, bbox))
             if roster_set and not in_roster:
-                reasons.append("bib_not_in_roster")
+                reasons.append("candidate_for_webapi_fusion")
             else:
-                reasons.append("low_confidence")
+                reasons.append("low_confidence_or_partial")
         else:
             reasons.append("below_review_min")
 
@@ -345,6 +377,8 @@ def classify(
         return core or bib
 
     # Multi-runner: one tag per sequence; roster → canonical Form; else digit-core.
+    # Precision-first (BR-OCR-CONF): nếu đã có hit ≥ auto + ∈ roster → auto_tagged
+    # chỉ với các tag đó. Không hạ cả ảnh xuống needs_review vì nhiễu watermark/số lạ.
     if autoable:
         autoable_sorted = sorted(autoable, key=sort_key, reverse=True)
         chosen: list[tuple[str, float, list[float]]] = []
@@ -358,11 +392,8 @@ def classify(
             if len(chosen) >= max_tags:
                 break
         if reviewable:
-            reasons.append("mixed_confidence")
-            extra_rev = [
-                t for t in reviewable if _seq_key(t[0]) not in seen_seqs
-            ][: max(0, max_tags - len(chosen))]
-            return ClassifiedTags(OcrJobStatus.needs_review, chosen + extra_rev, reasons, raw_texts)
+            # Log only — mid-conf / not-in-roster không chặn Matched của hit chắc.
+            reasons.append("mixed_confidence_ignored_for_auto")
         return ClassifiedTags(OcrJobStatus.auto_tagged, chosen, reasons, raw_texts)
 
     if reviewable:

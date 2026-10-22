@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from app.core.config import get_settings
+from app.core.device import resolve_device
 
 # Avoid oneDNN PIR crash on some Windows CPU builds.
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
@@ -25,34 +26,90 @@ class OcrCandidate:
     bbox: list[float]
 
 
+def _build_paddle(device: str, settings):
+    """Create PaddleOCR on device; raise if that device cannot init."""
+    from paddleocr import PaddleOCR  # type: ignore
+
+    kwargs = dict(
+        enable_mkldnn=False,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        text_detection_model_name=settings.ocr_det_model,
+        text_recognition_model_name=settings.ocr_rec_model,
+        text_det_limit_side_len=settings.ocr_det_limit_side_len,
+        text_det_limit_type="max",
+    )
+    # PaddleOCR 3.x: device="cpu" | "gpu:0". Older builds may ignore unknown kwargs.
+    paddle_device = "gpu:0" if device == "cuda" else "cpu"
+    try:
+        return PaddleOCR(device=paddle_device, **kwargs)
+    except TypeError:
+        # Older API: use_gpu bool
+        return PaddleOCR(use_gpu=(device == "cuda"), **kwargs)
+
+
 class OcrEngine:
     def __init__(self) -> None:
         self._paddle = None
+        self._device = "cpu"
+        self._device_detail = ""
         settings = get_settings()
         if settings.ocr_mock:
             return
-        try:
-            from paddleocr import PaddleOCR  # type: ignore
 
-            # Mobile det/rec + no doc/orientation modules → ~0.5–1.5s/CPU image after warm.
-            self._paddle = PaddleOCR(
-                enable_mkldnn=False,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-                text_detection_model_name=settings.ocr_det_model,
-                text_recognition_model_name=settings.ocr_rec_model,
-                text_det_limit_side_len=settings.ocr_det_limit_side_len,
-                text_det_limit_type="max",
+        info = resolve_device(settings.ocr_device)
+        self._device_detail = info.detail
+        # CPU wheel chấp nhận device=gpu:0 lúc init rồi crash 500 lúc infer —
+        # bắt buộc CPU khi detail báo paddle_cpu_wheel.
+        wanted = info.resolved
+        if "paddle_cpu_wheel" in (info.detail or ""):
+            if wanted == "cuda":
+                logger.warning(
+                    "Paddle is CPU wheel — forcing PaddleOCR device=cpu (YOLO may still use CUDA)"
+                )
+            wanted = "cpu"
+
+        try:
+            self._paddle = _build_paddle(wanted, settings)
+            self._device = wanted
+            logger.info(
+                "PaddleOCR loaded device=%s (requested=%s, %s)",
+                self._device,
+                info.requested,
+                info.detail,
             )
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "PaddleOCR unavailable. Install paddleocr/paddlepaddle or set OCR_MOCK=1"
-            ) from exc
+        except Exception as exc:
+            if wanted != "cpu":
+                logger.warning(
+                    "PaddleOCR on %s failed (%s) — falling back to CPU",
+                    wanted,
+                    exc,
+                )
+                try:
+                    self._paddle = _build_paddle("cpu", settings)
+                    self._device = "cpu"
+                    logger.info("PaddleOCR loaded device=cpu (fallback)")
+                except Exception as exc2:
+                    raise RuntimeError(
+                        "PaddleOCR unavailable. Install paddleocr/paddlepaddle or set OCR_MOCK=1"
+                    ) from exc2
+            else:
+                raise RuntimeError(
+                    "PaddleOCR unavailable. Install paddleocr/paddlepaddle or set OCR_MOCK=1"
+                ) from exc
 
     @property
     def name(self) -> str:
         return "mock" if self._paddle is None else "paddleocr-mobile"
+
+    @property
+    def device(self) -> str:
+        return self._device
+
+    @property
+    def device_detail(self) -> str:
+        return self._device_detail
 
     def warmup(self) -> None:
         if self._paddle is None:
@@ -60,7 +117,7 @@ class OcrEngine:
         tiny = Image.new("RGB", (64, 64), color=(255, 255, 255))
         try:
             self.recognize(tiny)
-            logger.info("OCR engine warmed up")
+            logger.info("OCR engine warmed up on %s", self._device)
         except Exception as exc:  # pragma: no cover
             logger.warning("OCR warmup failed: %s", exc)
 

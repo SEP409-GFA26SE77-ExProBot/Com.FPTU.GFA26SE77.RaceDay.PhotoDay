@@ -158,10 +158,49 @@ async def _load_bytes(req: CreateOcrJobRequest) -> bytes:
     return await fetch_image(str(req.image_url))
 
 
+def _upscale_min_side(crop: Image.Image, min_side: int = 320) -> Image.Image:
+    if max(crop.size) >= min_side:
+        return crop
+    s = min_side / float(max(crop.size))
+    return crop.resize(
+        (max(1, int(crop.size[0] * s)), max(1, int(crop.size[1] * s))),
+        Image.Resampling.LANCZOS,
+    )
+
+
+def _person_full_box(
+    person_xyxy: list[float],
+    img_w: int,
+    img_h: int,
+    *,
+    pad_ratio: float = 0.06,
+) -> list[float]:
+    x1, y1, x2, y2 = person_xyxy
+    bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
+    px, py = bw * pad_ratio, bh * pad_ratio
+    return [
+        max(0.0, x1 - px),
+        max(0.0, y1 - py),
+        min(float(img_w), x2 + px),
+        min(float(img_h), y2 + py),
+    ]
+
+
 def _ocr_on_rois(image: Image.Image, settings: Settings) -> tuple[list[OcrCandidate], dict]:
+    """YOLO person → OCR torso bands. Early-exit band loop per person when bib-like hit (CPU).
+
+    Người bị che một phần: band chest/waist có thể miss BIB dù crop solo đọc được —
+    retry 1 lần OCR full-person box (không full-frame cả ảnh).
+    """
+    from collections import defaultdict
+
+    from app.services.confidence import looks_like_bib
+
     detector = get_detector()
     engine = get_engine()
     meta: dict = {"yolo_enabled": detector.enabled, "person_count": 0, "roi_count": 0, "flags": []}
+    review_floor = float(settings.threshold_review_min)
+    img_w, img_h = image.size
 
     if detector.enabled:
         detected = detector.detect(image)
@@ -170,26 +209,96 @@ def _ocr_on_rois(image: Image.Image, settings: Settings) -> tuple[list[OcrCandid
         meta["flags"].append(f"yolo_persons_{detected.person_count}")
         meta["flags"].append(f"yolo_rois_{len(detected.rois)}")
 
+        by_person: dict[int, list] = defaultdict(list)
+        for roi in detected.rois:
+            by_person[roi.person_index].append(roi)
+
         all_cands: list[OcrCandidate] = []
-        for i, roi in enumerate(detected.rois):
-            crop = roi.crop
-            if max(crop.size) < 320:
-                s = 320 / float(max(crop.size))
-                crop = crop.resize(
-                    (max(1, int(crop.size[0] * s)), max(1, int(crop.size[1] * s))),
-                    Image.Resampling.LANCZOS,
+        roi_i = 0
+        early_exits = 0
+        person_retries = 0
+        for person_index in sorted(by_person.keys()):
+            person_cands: list[OcrCandidate] = []
+            # Người nhỏ / det yếu / bị che → ROI khó hơn crop solo → hạ conf.
+            area_frac = 0.0
+            det_conf = 1.0
+            if person_index < len(detected.person_boxes):
+                bx = detected.person_boxes[person_index]
+                area_frac = max(0.0, (bx[2] - bx[0]) * (bx[3] - bx[1])) / max(
+                    1.0, float(img_w * img_h)
                 )
-            cands = engine.recognize(crop)
-            offset_candidates_bbox(cands, roi.bbox)
-            for c in cands:
-                c.confidence = min(1.0, c.confidence + 0.02)
-            all_cands.extend(cands)
-            meta[f"roi_{i}"] = {
-                "band": roi.band,
-                "person_index": roi.person_index,
-                "bbox": roi.bbox,
-                "det_conf": round(roi.confidence, 3),
-            }
+            if by_person[person_index]:
+                det_conf = float(by_person[person_index][0].confidence)
+            hard_roi_penalty = 0.0
+            if area_frac > 0 and area_frac < 0.04:
+                hard_roi_penalty += 0.06
+            if det_conf < 0.45:
+                hard_roi_penalty += 0.05
+
+            for roi in by_person[person_index]:
+                crop = _upscale_min_side(roi.crop)
+                cands = engine.recognize(crop)
+                offset_candidates_bbox(cands, roi.bbox)
+                for c in cands:
+                    # Không bump +0.01 (đẩy đuôi về 0.99). Soft-cap + hard-ROI penalty.
+                    c.confidence = min(0.95, max(0.0, float(c.confidence) - hard_roi_penalty))
+                person_cands.extend(cands)
+                all_cands.extend(cands)
+                meta[f"roi_{roi_i}"] = {
+                    "band": roi.band,
+                    "person_index": roi.person_index,
+                    "bbox": roi.bbox,
+                    "det_conf": round(roi.confidence, 3),
+                }
+                roi_i += 1
+                # Chest hit đủ rõ → bỏ waist/hips cùng người (tiết kiệm ~2× Paddle/person).
+                if any(
+                    looks_like_bib(c.bib_raw) and float(c.confidence) >= review_floor
+                    for c in cands
+                ):
+                    early_exits += 1
+                    break
+
+            has_bib = any(
+                looks_like_bib(c.bib_raw) and float(c.confidence) >= review_floor
+                for c in person_cands
+            )
+            if (
+                not has_bib
+                and getattr(settings, "yolo_person_full_retry", True)
+                and person_index < len(detected.person_boxes)
+            ):
+                box = _person_full_box(
+                    detected.person_boxes[person_index],
+                    img_w,
+                    img_h,
+                    pad_ratio=max(0.04, float(settings.yolo_torso_pad)),
+                )
+                if box[2] - box[0] >= 16 and box[3] - box[1] >= 16:
+                    crop = _upscale_min_side(
+                        image.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3]))),
+                        min_side=400,
+                    )
+                    cands = engine.recognize(crop)
+                    offset_candidates_bbox(cands, box)
+                    for c in cands:
+                        # person_full = case khó (band miss / che một phần) — hạ conf rõ.
+                        c.confidence = min(0.88, float(c.confidence) * 0.90)
+                    all_cands.extend(cands)
+                    person_retries += 1
+                    meta[f"roi_{roi_i}"] = {
+                        "band": "person_full",
+                        "person_index": person_index,
+                        "bbox": box,
+                        "det_conf": None,
+                    }
+                    roi_i += 1
+
+        if early_exits:
+            meta["flags"].append(f"roi_band_early_exit_{early_exits}")
+            meta["rois_ocr_run"] = roi_i
+        if person_retries:
+            meta["flags"].append(f"person_full_retry_{person_retries}")
 
         if all_cands:
             meta["flags"].append("ocr_on_person_roi")

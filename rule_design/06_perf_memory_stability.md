@@ -40,13 +40,16 @@ Giữ `02_ocr_confidence_pipeline.md`:
 
 ## Config mặc định
 
-| Key | Default |
+| Key | Default (khớp `.env.example` / `config.py`) |
 |---|---|
-| `MAX_INFLIGHT` | 2 |
-| `MAX_IMAGE_SIDE` | 2000 |
+| `MAX_INFLIGHT` | 2 (khớp WebAPI `Photo:Ocr:WorkerMaxParallel`) |
+| `MAX_IMAGE_SIDE` | 1600 |
 | `BLUR_MIN_VARIANCE` | 40 |
 | `NEAR_DUP_HAMMING_MAX` | 5 |
-| `THRESHOLD_AUTO` | 0.95 |
-| `THRESHOLD_REVIEW_MIN` | 0.70 |
+| `THRESHOLD_AUTO` | 0.85 |
+| `THRESHOLD_REVIEW_MIN` | 0.50 |
+| `OCR_DEVICE` | `auto` (không GPU → CPU, không crash) |
+
+Device GPU/CUDA cấu hình trên **OCR service**, không trên Host WebAPI. Chi tiết: `README.md` §3.1.
 
 Calibrate blur threshold trên sample thật trước khi demo.

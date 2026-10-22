@@ -28,7 +28,7 @@ Site Ultralytics / Paddle thường **quảng cáo bản mới nhất** (vd YOLO
 
 1. [Mục đích & phạm vi](#1-mục-đích--phạm-vi)
 2. [Máy khác pull về — cài & chạy (checklist)](#2-máy-khác-pull-về--cài--chạy-checklist)
-3. [Cấu hình môi trường (`.env`)](#3-cấu-hình-môi-trường-env)
+3. [Cấu hình môi trường (`.env`)](#3-cấu-hình-môi-trường-env) · [§3.1 Device GPU/CPU](#31-device-gpucpu--không-sập-khi-thiếu-cuda)
 4. [Cấu trúc thư mục & file](#4-cấu-trúc-thư-mục--file)
 5. [API nhanh](#5-api-nhanh)
 6. [Tích hợp vào RaceDay WebAPI](#6-tích-hợp-vào-raceday-webapi)
@@ -78,6 +78,7 @@ Chi tiết: [`doc/04_quyet_dinh_batch_vs_cam.md`](doc/04_quyet_dinh_batch_vs_cam
 | RAM | ≥ 8 GB (khuyến nghị 16 GB khi bật YOLO+OCR thật) |
 | Disk | ≥ 3 GB trống (venv + model cache) |
 | Mạng lần đầu | Cần tải `yolov8n.pt` + PaddleOCR models (sau đó offline được) |
+| **GPU** | **Không bắt buộc.** Không CUDA / VPS CPU-only → vẫn chạy (`OCR_DEVICE=auto` fallback CPU). Có NVIDIA + torch CUDA → YOLO nhanh hơn; Paddle thường vẫn CPU nếu cài `paddlepaddle` (CPU wheel) — xem [§3 Device](#31-device-gpucpu--không-sập-khi-thiếu-cuda) |
 
 ### Windows (khuyến nghị)
 
@@ -124,6 +125,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8089
 Invoke-RestMethod http://127.0.0.1:8089/healthz
 
 # Kỳ vọng: status=ok, ocr_mock=false, engine=paddleocr-mobile, yolo_enabled=true
+# device.yolo / device.paddle = cpu|cuda; detail có thể chứa paddle_cpu_wheel
+# Máy không GPU: cuda_available=false, cả hai thường = cpu — vẫn ok
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 .\.venv\Scripts\python.exe scripts\test_bib_filter.py
 ```
@@ -152,7 +155,7 @@ File mẫu: [`src/.env.example`](src/.env.example) → copy thành `src/.env` (l
 | `NEAR_DUP_HAMMING_MAX` | `5` | dHash gần giống nếu Hamming ≤ giá trị này |
 | `BLUR_MIN_VARIANCE` | `40` | Laplacian variance dưới mức → bỏ ảnh mờ |
 | `MAX_IMAGE_SIDE` | `1600` | Cạnh dài tối đa sau downscale |
-| `MAX_INFLIGHT` | `1` | Số job OCR song song / process |
+| `MAX_INFLIGHT` | `2` | Job OCR song song / process. **Khớp** WebAPI `Photo:Ocr:WorkerMaxParallel`. ≤2 khi Paddle còn CPU; GPU YOLO + Paddle CUDA mới cân nhắc 3–4 |
 | `BIB_MIN_DIGITS` | `3` | Độ dài số BIB tối thiểu (3 = hỗ trợ fun-run 3 số) |
 | `BIB_MAX_DIGITS` | `6` | Độ dài số BIB tối đa |
 | `BIB_MAX_TAGS` | `8` | Số BIB tối đa / ảnh (đám đông nhiều runner) |
@@ -160,16 +163,46 @@ File mẫu: [`src/.env.example`](src/.env.example) → copy thành `src/.env` (l
 | `OCR_REC_MODEL` | `en_PP-OCRv5_mobile_rec` | Model nhận dạng chữ |
 | `OCR_DET_LIMIT_SIDE_LEN` | `1280` | Giới hạn cạnh khi detect text |
 | `OCR_WARMUP_ON_START` | `true` | Load model lúc start |
+| `OCR_DEVICE` | `auto` | `auto` \| `cpu` \| `cuda` — chọn device ưu tiên (xem §3.1) |
+| `YOLO_DEVICE` | *(trống)* | Override riêng YOLO; trống = theo `OCR_DEVICE`. Ví dụ YOLO CUDA + Paddle CPU wheel |
 | `YOLO_ENABLED` | `true` | Bật detect người trước OCR |
 | `YOLO_MODEL` | `yolov8n.pt` | File weights **YOLOv8n** (auto-download). Không phải YOLO26 trừ khi đổi tay |
 | `YOLO_CONF` | `0.25` | Ngưỡng conf person box |
-| `YOLO_MAX_PEOPLE` | `8` | Tối đa người/ảnh |
+| `YOLO_IOU` | `0.88` | IoU NMS — cao hơn giữ box chồng (người bị che một phần) |
+| `YOLO_MAX_PEOPLE` | `10` | Tối đa người/ảnh |
 | `YOLO_TORSO_PAD` | `0.08` | Pad quanh band ROI |
+| `YOLO_PERSON_FULL_RETRY` | `true` | Band torso không ra BIB → thử thêm 1 crop full-person (không full-frame ảnh) |
 | `OCR_FULLFRAME_FALLBACK` | `false` | `false` = không OCR cả khung (tránh watermark) |
 | `REDIS_URL` | *(trống)* | **Chưa dùng** — phase WebAPI |
 | `WEBAPI_CALLBACK_BASE` | *(trống)* | **Chưa dùng** — phase WebAPI |
 
 Đổi `.env` → **restart** uvicorn (settings được cache).
+
+### 3.1 Device (GPU/CPU) — không sập khi thiếu CUDA
+
+Cấu hình device **chỉ thuộc service này** (`core/device.py`, `detector.py`, `ocr_engine.py`). WebAPI RaceDay chỉ gọi HTTP + `WorkerMaxParallel` — **không** cài CUDA trong BE.
+
+| Tình huống | Hành vi |
+|---|---|
+| Không GPU / torch không CUDA | `OCR_DEVICE=auto` → **CPU**; process **không crash** |
+| `OCR_DEVICE=cuda` nhưng không có GPU | Warning + **fallback CPU** |
+| Torch CUDA OK, Paddle cài **CPU wheel** (`paddlepaddle` thường gặp) | `/healthz` → `detail` chứa `paddle_cpu_wheel`. **YOLO có thể `cuda`**, **Paddle bắt buộc `cpu`** (ép trong `ocr_engine` — tránh init `gpu:0` rồi infer 500) |
+| YOLO predict/warmup CUDA lỗi giữa chừng | Tự retry **CPU** rồi chạy tiếp |
+| Paddle init CUDA fail | Fallback build **CPU**; chỉ fail cứng nếu CPU wheel cũng không load được (thiếu package) |
+
+Kiểm tra nhanh:
+
+```powershell
+(Invoke-RestMethod http://127.0.0.1:8089/healthz).device
+# requested, resolved_pref, cuda_available, yolo, paddle, detail
+```
+
+**Cài GPU (tùy chọn, máy có NVIDIA):**
+
+1. Cài [CUDA toolkit / driver](https://developer.nvidia.com/cuda-downloads) phù hợp.
+2. Torch CUDA (YOLO): theo [pytorch.org](https://pytorch.org/get-started/locally/) — ví dụ cu124 — **trong `.venv`**, thay bản CPU nếu cần.
+3. Paddle GPU: chỉ khi cài đúng **paddlepaddle-gpu** khớp CUDA. Nếu vẫn CPU wheel → để nguyên; YOLO GPU + Paddle CPU vẫn ổn định hơn ép Paddle `cuda`.
+4. Local demo thường: `OCR_DEVICE=cuda` + `YOLO_DEVICE=cuda` (hoặc để `auto`). VPS không GPU: giữ `OCR_DEVICE=auto`.
 
 ### Link cấu hình engine (khớp version đang dùng)
 
@@ -224,6 +257,7 @@ SEP_Service_Photo/
         ├── core/
         │   ├── config.py     ← Settings từ .env
         │   ├── concurrency.py← MAX_INFLIGHT semaphore
+        │   ├── device.py     ← OCR_DEVICE / YOLO_DEVICE + CPU fallback
         │   └── status.py     ← OcrJobStatus enum
         ├── schemas/jobs.py   ← Pydantic request/response
         ├── services/
@@ -247,13 +281,14 @@ Header (khi `OCR_AUTH_DISABLED=false`): `X-Service-Key: <OCR_SERVICE_KEY>`
 
 | Method | Path | Mô tả |
 |---|---|---|
-| `GET` | `/healthz` | Health + `ocr_mock` / `yolo_enabled` / engine |
+| `GET` | `/healthz` | Health + engine + `device.{yolo,paddle,detail}` + `max_inflight` |
 | `GET` | `/demo` | UI upload demo |
 | `POST` | `/v1/ocr/jobs` | JSON + `image_url` → trả `result` (phase standalone) |
 | `POST` | `/v1/ocr/jobs/upload` | Multipart file (local/demo) |
 | `GET` | `/v1/ocr/jobs/{job_id}` | Kết quả in-memory |
 | `GET` | `/v1/ocr/jobs?event_id=` | List theo event |
 | `PUT` | `/v1/events/{event_id}/ocr-config` | Ngưỡng theo event |
+| `POST` | `/v1/ocr/dedupe/clear` | Dev: xóa index SHA/dhash in-memory (sau khi truncate DB WebAPI) |
 
 Swagger: `http://127.0.0.1:8089/docs`
 
@@ -270,7 +305,8 @@ Hợp đồng đầy đủ khi nối WebAPI: [`rule_design/05_api_contracts.md`]
 3. OCR workers lấy job từ queue (Redis) hoặc (tạm) WebAPI gọi OCR service async.  
 4. Kết quả callback/internal API → WebAPI ghi tags + index search.  
 5. Runner search BIB chỉ **đọc DB** (SLO &lt;2s) — không chờ OCR đồng bộ.  
-6. Mỗi OCR process: `MAX_INFLIGHT=1`; scale = **thêm worker**, không tăng concurrency bừa.
+6. Mỗi OCR process: `MAX_INFLIGHT=2` (mặc định) — **đồng bộ** với WebAPI `Photo:Ocr:WorkerMaxParallel`. Scale thêm instance worker khi cần; đừng tăng concurrency bừa khi Paddle còn CPU.  
+7. Device GPU/CUDA cấu hình **trên OCR service** (`OCR_DEVICE` / `YOLO_DEVICE`), không trong Host WebAPI.
 
 ### Luồng đề xuất
 
@@ -367,10 +403,11 @@ Orchestrator: `src/app/services/pipeline.py`.
 |---|---|
 | **Ý tưởng** | Object detection 1-stage tìm box người trong đám đông |
 | **Cách chạy** | `YOLO("yolov8n.pt").predict(...)`, class COCO `person=0`, sort theo diện tích, lấy ≤ `YOLO_MAX_PEOPLE` |
-| **Cấu hình** | `YOLO_ENABLED`, `YOLO_MODEL=yolov8n.pt`, `YOLO_CONF`, `YOLO_MAX_PEOPLE` |
-| **File** | `services/detector.py` |
+| **Cấu hình** | `YOLO_ENABLED`, `YOLO_MODEL=yolov8n.pt`, `YOLO_CONF`, `YOLO_IOU`, `YOLO_MAX_PEOPLE`, `YOLO_DEVICE` / `OCR_DEVICE` |
+| **File** | `services/detector.py` · probe `core/device.py` |
 | **Nguồn / cấu hình** | [YOLOv8 docs](https://docs.ultralytics.com/models/yolov8/) (bảng có `yolov8n.pt`) · [Predict mode](https://docs.ultralytics.com/modes/predict/) |
 | **Lưu ý docs** | Trang chủ Ultralytics có thể hiện **YOLO26** — đó là model family mới hơn; **repo này chưa dùng**. Chỉ đổi khi đổi `YOLO_MODEL` có chủ đích. |
+| **Device** | `predict(device=cpu\|cuda)`; không GPU / lỗi CUDA → fallback CPU (warmup + predict). |
 
 ---
 
@@ -392,10 +429,11 @@ Orchestrator: `src/app/services/pipeline.py`.
 |---|---|
 | **Ý tưởng** | Det tìm chữ + Rec đọc chuỗi + `rec_score ∈ [0,1]` |
 | **Cách chạy** | `PaddleOCR(det=PP-OCRv5_mobile_det, rec=en_PP-OCRv5_mobile_rec)` trên mỗi crop; tắt doc orientation/unwarp; `enable_mkldnn=False` (ổn định Windows) |
-| **Cấu hình** | `OCR_DET_MODEL`, `OCR_REC_MODEL`, `OCR_DET_LIMIT_SIDE_LEN`, `OCR_MOCK`, `OCR_WARMUP_ON_START` |
-| **File** | `services/ocr_engine.py` |
+| **Cấu hình** | `OCR_DET_MODEL`, `OCR_REC_MODEL`, `OCR_DET_LIMIT_SIDE_LEN`, `OCR_MOCK`, `OCR_WARMUP_ON_START`, `OCR_DEVICE` |
+| **File** | `services/ocr_engine.py` · probe `core/device.py` |
 | **Nguồn / cấu hình** | [OCR pipeline 3.x](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/OCR.html) · [Text recognition](https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_recognition.html) · [Text detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_detection.html) · [PP-OCRv5 report](https://arxiv.org/html/2507.05595) |
 | **Lưu ý docs** | Không dùng trang **v2.9 inference_args** làm chuẩn — API 3.x dùng tên `text_det_limit_side_len` (khớp `OCR_DET_LIMIT_SIDE_LEN` trong `.env`) |
+| **Device** | PaddleOCR 3.x: `device=cpu` \| `gpu:0`. Nếu probe báo `paddle_cpu_wheel` → **ép CPU** dù `OCR_DEVICE=cuda` (tránh 500 lúc infer). Init CUDA fail → retry CPU. |
 | **Quan trọng** | `rec_score` cao ≠ đúng BIB (watermark có thể 0.99) |
 
 Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_models\` và YOLO cache Ultralytics.
@@ -421,7 +459,7 @@ Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_mo
 |---|---|
 | **Ý tưởng** | Giới hạn job OCR đồng thời trong 1 process để tránh OOM/đơ |
 | **Cách chạy** | `asyncio.Semaphore(MAX_INFLIGHT)` bọc `run_pipeline` |
-| **Cấu hình** | `MAX_INFLIGHT` (khuyến nghị `1` trên CPU) |
+| **Cấu hình** | `MAX_INFLIGHT` (mặc định `2`; khớp WebAPI `WorkerMaxParallel`) |
 | **File** | `core/concurrency.py` |
 | **Nguồn** | [Python asyncio.Semaphore](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Semaphore) · rule [`06_perf_memory_stability.md`](rule_design/06_perf_memory_stability.md) |
 
@@ -453,7 +491,10 @@ Cache model lần đầu (Windows ví dụ): `%USERPROFILE%\.paddlex\official_mo
 | **no_bib** | Không có BIB hợp lệ / blur / không person |
 | **duplicate** | Trùng exact hoặc near-dup |
 | **roster** | Danh sách BIB hợp lệ của event (WebAPI sở hữu) |
-| **MAX_INFLIGHT** | Số job OCR song song tối đa / process |
+| **MAX_INFLIGHT** | Số job OCR song song tối đa / process (khớp WebAPI `WorkerMaxParallel`) |
+| **OCR_DEVICE** | `auto` \| `cpu` \| `cuda` — preference device toàn pipeline |
+| **YOLO_DEVICE** | Override device riêng YOLO (trống = theo `OCR_DEVICE`) |
+| **paddle_cpu_wheel** | Chuỗi trong `healthz.device.detail`: Paddle build không CUDA → OCR chữ chạy CPU |
 | **warmup** | Chạy predict giả lúc start để nạp model vào RAM |
 | **full-frame** | OCR cả ảnh (thường tắt — nhiễu watermark) |
 | **service key** | Secret máy–máy, khác JWT user |
@@ -471,7 +512,8 @@ Status enum: `src/app/core/status.py`.
 |---|---|
 | Service đứng riêng | FastAPI + `/demo` + `/healthz` + upload API |
 | Pipeline đầy đủ | Dedupe → blur → YOLO multi-band → Paddle → classify |
-| Tốc độ sau warm-up | Thường ~0.5–2s/ảnh CPU (tùy ảnh/số người) |
+| Tốc độ sau warm-up | Thường ~0.5–2s/ảnh CPU (tùy ảnh/số người); YOLO CUDA + Paddle CPU nhanh hơn đoạn detect |
+| GPU optional | Không CUDA vẫn chạy; `/healthz` báo `yolo`/`paddle` thực tế |
 | Ảnh VN sample (smoke) | Đúng core BIB trên các case rõ (vd 80074 / 80087 / 80183); case mờ/khó → `no_bib` |
 | Watermark | Không gắn tag `QUYNHON` / slogan sự kiện |
 | Tài liệu | `rule_design/` + `doc/` + PPTX thuyết trình thuật toán |
@@ -491,6 +533,12 @@ Status enum: `src/app/core/status.py`.
 | Lần đầu rất chậm | Đang tải model — chờ warmup xong; lần sau dùng cache |
 | `ModuleNotFoundError` | Chạy trong `.venv` và `cd src` trước `uvicorn` |
 | YOLO không tải | Cần mạng lần đầu; hoặc copy `yolov8n.pt` vào cwd `src/` |
+| Máy không GPU / sợ sập | Giữ `OCR_DEVICE=auto` (hoặc `cpu`). Code fallback CPU — **không** cần CUDA để chạy |
+| `healthz`: `paddle=cuda` nhưng `detail` có `paddle_cpu_wheel` | Bản cũ; restart service sau khi pull — Paddle phải ép `cpu`. Nếu vẫn GPU → kiểm tra `ocr_engine.py` |
+| OCR job HTTP 500 sau khi bật `OCR_DEVICE=cuda` | Thường Paddle CPU wheel bị ép GPU. Restart bản có force CPU; hoặc tạm `OCR_DEVICE=cpu` / `YOLO_DEVICE=cuda` |
+| `cuda_available=false` dù có card | Torch đang bản CPU — cài lại torch CUDA trong `.venv` (xem §3.1) |
+| WebAPI chỉ xử lý 2 ảnh/lúc | Đúng: `MAX_INFLIGHT=2` + `WorkerMaxParallel=2`. Tăng **cả hai** nếu muốn thử 3–4 (risk RAM khi Paddle CPU) |
+| Upload lại báo trùng sau truncate DB | `POST /v1/ocr/dedupe/clear` + header `X-Service-Key` (index SHA/dhash in-memory) |
 | Ảnh không người → `no_bib` | Đúng kỳ vọng khi `OCR_FULLFRAME_FALLBACK=false` |
 | Conf = 1.0 nhưng sai | Bình thường với watermark/nhầm số — dùng review + roster WebAPI |
 | PowerShell chặn `.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
