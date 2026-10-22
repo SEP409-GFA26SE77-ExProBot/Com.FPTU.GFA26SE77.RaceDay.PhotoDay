@@ -53,9 +53,14 @@ def demo_page() -> FileResponse:
 
 @app.get("/healthz")
 def healthz() -> dict:
+    from app.core.device import resolve_device
     from app.services.pipeline import get_detector, get_engine
 
     settings = get_settings()
+    pref = settings.ocr_device
+    info = resolve_device(pref)
+    det = get_detector()
+    eng = get_engine()
     return {
         "status": "ok",
         "version": __version__,
@@ -63,8 +68,16 @@ def healthz() -> dict:
         "webapi_integration": "deferred",
         "ocr_mock": settings.ocr_mock,
         "model_loaded": not settings.ocr_mock,
-        "engine": "mock" if settings.ocr_mock else get_engine().name,
-        "yolo_enabled": bool(settings.yolo_enabled and get_detector().enabled),
+        "engine": "mock" if settings.ocr_mock else eng.name,
+        "yolo_enabled": bool(settings.yolo_enabled and det.enabled),
+        "device": {
+            "requested": info.requested,
+            "resolved_pref": info.resolved,
+            "cuda_available": info.cuda_available,
+            "yolo": getattr(det, "device", "n/a"),
+            "paddle": getattr(eng, "device", "n/a"),
+            "detail": info.detail,
+        },
         "max_inflight": settings.max_inflight,
         "max_image_side": settings.max_image_side,
     }

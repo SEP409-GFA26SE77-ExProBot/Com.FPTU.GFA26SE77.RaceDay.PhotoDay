@@ -141,3 +141,17 @@ async def update_config(
     if body.blur_min_variance is not None:
         cfg["blur_min_variance"] = body.blur_min_variance
     return {"event_id": event_id, "config": cfg}
+
+
+@router.post("/ocr/dedupe/clear")
+async def clear_dedupe_index(
+    event_id: str | None = None,
+    x_service_key: str | None = Header(default=None),
+) -> dict:
+    """Dev/retest: xóa SHA/dhash in-memory (Postgres truncate không đụng cache này)."""
+    from app.services.dedupe import clear_dedupe
+
+    settings = get_settings()
+    _auth(settings, x_service_key)
+    cleared = clear_dedupe(event_id)
+    return {"ok": True, "cleared": cleared, "event_id": event_id}

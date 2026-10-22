@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from app.core.config import get_settings
+from app.core.device import resolve_device
 
 logger = logging.getLogger(__name__)
 _PERSON_CLASS_ID = 0  # COCO person
@@ -27,19 +28,34 @@ class PersonRoi:
 class DetectResult:
     rois: list[PersonRoi] = field(default_factory=list)
     person_count: int = 0
+    # Full person xyxy (same order as person_index) for per-person retry OCR.
+    person_boxes: list[list[float]] = field(default_factory=list)
 
 
 class PersonDetector:
     def __init__(self) -> None:
         self._model = None
+        self._device = "cpu"
+        self._device_detail = ""
         settings = get_settings()
         if not settings.yolo_enabled:
             return
+        pref = (settings.yolo_device or settings.ocr_device or "auto").strip()
+        info = resolve_device(pref)
+        self._device = info.resolved
+        self._device_detail = info.detail
         try:
             from ultralytics import YOLO  # type: ignore
 
             self._model = YOLO(settings.yolo_model)
-            logger.info("YOLO loaded: %s", settings.yolo_model)
+            # Force CPU path if resolved cpu (ultralytics may still prefer CUDA otherwise).
+            logger.info(
+                "YOLO loaded: %s device=%s (requested=%s, %s)",
+                settings.yolo_model,
+                self._device,
+                info.requested,
+                info.detail,
+            )
         except Exception as exc:  # pragma: no cover
             logger.warning("YOLO unavailable (%s)", exc)
             self._model = None
@@ -48,13 +64,31 @@ class PersonDetector:
     def enabled(self) -> bool:
         return self._model is not None
 
+    @property
+    def device(self) -> str:
+        return self._device
+
+    @property
+    def device_detail(self) -> str:
+        return self._device_detail
+
     def warmup(self) -> None:
         if self._model is None:
             return
         try:
             self.detect(Image.new("RGB", (64, 64), color=(128, 128, 128)))
-            logger.info("YOLO warmed up")
+            logger.info("YOLO warmed up on %s", self._device)
         except Exception as exc:  # pragma: no cover
+            if self._device != "cpu":
+                logger.warning("YOLO warmup on %s failed (%s) — retry CPU", self._device, exc)
+                self._device = "cpu"
+                try:
+                    self.detect(Image.new("RGB", (64, 64), color=(128, 128, 128)))
+                    logger.info("YOLO warmed up on cpu (fallback)")
+                    return
+                except Exception as exc2:
+                    logger.warning("YOLO warmup failed: %s", exc2)
+                    return
             logger.warning("YOLO warmup failed: %s", exc)
 
     def detect(self, image: Image.Image) -> DetectResult:
@@ -62,27 +96,49 @@ class PersonDetector:
             return DetectResult()
 
         settings = get_settings()
-        results = self._model.predict(
-            np.asarray(image.convert("RGB")),
+        predict_kw = dict(
             conf=settings.yolo_conf,
+            iou=float(getattr(settings, "yolo_iou", 0.88) or 0.88),
             classes=[_PERSON_CLASS_ID],
+            device=self._device,
             verbose=False,
         )
+        try:
+            results = self._model.predict(np.asarray(image.convert("RGB")), **predict_kw)
+        except Exception as exc:
+            if self._device != "cpu":
+                logger.warning("YOLO predict on %s failed (%s) — fallback CPU", self._device, exc)
+                self._device = "cpu"
+                predict_kw["device"] = "cpu"
+                results = self._model.predict(np.asarray(image.convert("RGB")), **predict_kw)
+            else:
+                raise
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             return DetectResult()
 
         w, h = image.size
         boxes = results[0].boxes.xyxy.cpu().numpy()
         confs = results[0].boxes.conf.cpu().numpy()
-        order = np.argsort(-(boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))
+        # Prefer larger people, but break ties by det confidence (occluded mid-pack).
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        order = np.lexsort((-confs, -areas))
         max_people = max(1, settings.yolo_max_people)
 
         rois: list[PersonRoi] = []
+        person_boxes: list[list[float]] = []
         person_count = 0
         for person_index, idx in enumerate(order[:max_people]):
             person_count += 1
             x1, y1, x2, y2 = (float(v) for v in boxes[idx])
             conf = float(confs[idx])
+            person_boxes.append(
+                [
+                    max(0.0, x1),
+                    max(0.0, y1),
+                    min(float(w), x2),
+                    min(float(h), y2),
+                ]
+            )
             for band, box in _bib_bands(x1, y1, x2, y2, w, h, pad_ratio=settings.yolo_torso_pad):
                 crop = image.crop((box[0], box[1], box[2], box[3]))
                 if crop.size[0] < 16 or crop.size[1] < 16:
@@ -96,7 +152,7 @@ class PersonDetector:
                         person_index=person_index,
                     )
                 )
-        return DetectResult(rois=rois, person_count=person_count)
+        return DetectResult(rois=rois, person_count=person_count, person_boxes=person_boxes)
 
 
 def _bib_bands(

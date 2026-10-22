@@ -28,6 +28,20 @@ _EVENT_SHA: dict[str, dict[str, str]] = {}
 _EVENT_DHASH: dict[str, dict[str, str]] = {}
 
 
+def clear_dedupe(event_id: str | None = None) -> dict[str, int]:
+    """Xóa index trùng (dev retest). event_id=None → clear all events."""
+    if event_id:
+        n_sha = len(_EVENT_SHA.pop(event_id, {}) or {})
+        n_dh = len(_EVENT_DHASH.pop(event_id, {}) or {})
+        return {"events": 1 if (n_sha or n_dh) else 0, "sha": n_sha, "dhash": n_dh}
+    n_events = len(set(_EVENT_SHA) | set(_EVENT_DHASH))
+    n_sha = sum(len(v) for v in _EVENT_SHA.values())
+    n_dh = sum(len(v) for v in _EVENT_DHASH.values())
+    _EVENT_SHA.clear()
+    _EVENT_DHASH.clear()
+    return {"events": n_events, "sha": n_sha, "dhash": n_dh}
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 

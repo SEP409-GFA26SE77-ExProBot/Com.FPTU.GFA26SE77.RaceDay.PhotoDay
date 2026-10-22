@@ -4,6 +4,102 @@ Mọi lần **add / sửa / xóa** rule, doc, hoặc source đều ghi tại đ�
 
 ---
 
+## 2026-10-22 — OCR không discard sớm: forward candidate cho WebAPI fusion
+
+### Sửa
+- `classify`: mọi token ≥ `threshold_review_min` → `needs_review` + tags (kể cả ngoài roster / partial)
+- Chỉ `auto_tagged` khi ∈ roster + full-strength token (không promote `0001`→`50001` ở OCR)
+- WebAPI: `no_bib` + còn tags → vẫn chạy fused match (không discard sớm)
+
+### Lý do
+Photo service trả `no_bib` trước → WebAPI không kịp fuzzy `0001`↔`50001` / Review.
+
+---
+
+## 2026-10-22 — WebAPI fused confidence 0.7×model + 0.3×match
+
+### Sửa (WebAPI ApplyOcr)
+- `final = 0.7×model + 0.3×match − penalty` (ambiguous −0.08)
+- Matched: match≥0.95 + final≥auto; Review: match≥0.70 (partial/fuzzy); else Discard
+- Partial suffix (vd `0001`→`50001`) → NeedsReview, không auto đoán
+
+### Lý do
+Chọn phương án mạnh nhất: roster + điểm fused; conf UI phân tán; review có đường vào.
+
+---
+
+## 2026-10-22 — Review chỉ bib ∈ roster giải
+
+### Sửa
+- `classify`: mid-conf **ngoài roster** không `needs_review` (reason `bib_not_in_roster` → `no_bib` nếu không hit)
+- WebAPI ApplyOcr: Matched/Review **chỉ tag resolve ∈ roster**; không hit → Discard `bib_not_in_roster`
+- Detail chỉ còn tag đã lưu = bib thuộc giải
+
+### Lý do
+Ảnh OCR ra 992/60389… không thuộc runner giải vẫn vào Sửa BIB.
+
+---
+
+## 2026-10-22 — Confidence không overclaim 100%
+
+### Sửa
+- Giảm torso/ROI bonus; cap báo cáo **0.99** (`_report_confidence`)
+- WebAPI apply OCR cũng clamp ≤ 0.99
+- FE: `formatConfidence` max 99.9%; dashboard tỉ lệ khớp/review/loại + ước lượng precision
+
+### Lý do
+Bonus cũ đẩy mọi tag lên 1.0 → UI luôn 100% dù batch reject nhiều.
+
+---
+
+## 2026-10-22 — Docs: GPU/CPU + MAX_INFLIGHT khớp WebAPI
+
+### Sửa
+- `README.md` §3 / §3.1 Device: không CUDA không sập; YOLO CUDA vs `paddle_cpu_wheel`; khớp `WorkerMaxParallel`
+- `.env.example` + `src/README.md`: comment device / parallel
+- Troubleshooting: OCR 500 khi ép Paddle GPU trên CPU wheel; `dedupe/clear`
+
+### Lý do
+Teammate dễ nhầm GPU nằm ở WebAPI hoặc sợ máy không CUDA thì service chết.
+
+---
+
+## 2026-10-22 — Paddle CPU wheel: force device=cpu khi infer
+
+### Sửa
+- `ocr_engine.py`: nếu `detail` chứa `paddle_cpu_wheel` → **ép PaddleOCR `cpu`** dù `OCR_DEVICE=cuda` (YOLO vẫn CUDA được)
+- Tránh init nhận `gpu:0` rồi **HTTP 500** lúc recognize
+
+### Lý do
+Torch CUDA + `paddlepaddle` (CPU wheel) báo health `paddle=cuda` giả → batch Failed / UI treo.
+
+---
+
+## 2026-10-22 — Device auto-detect (GPU optional, VPS-safe)
+
+### Sửa
+- `OCR_DEVICE=auto|cpu|cuda` (+ optional `YOLO_DEVICE`): probe torch/paddle CUDA
+- Không GPU / wheel CPU / init fail → **fallback CPU**, không crash
+- YOLO `predict(device=…)` + Paddle `device=gpu:0|cpu` với retry CPU
+- `/healthz` trả `device.{requested,cuda_available,yolo,paddle,detail}`
+
+### Lý do
+Deploy VPS/máy không GPU vẫn chạy; máy có GPU dùng được khi cài CUDA wheel.
+
+---
+
+## 2026-10-22 — Precision auto + CPU-safe throughput
+
+### Sửa
+- `confidence.py`: có hit ≥ `threshold_auto` + ∈ roster → **`auto_tagged` chỉ các tag đó**; không hạ cả ảnh xuống `needs_review` vì nhiễu (watermark / số lạ)
+- `pipeline.py`: OCR ROI theo người; **early-exit band** (chest đủ rõ → bỏ waist/hips) để giảm Paddle/ảnh
+- Default `MAX_INFLIGHT=2`, `YOLO_MAX_PEOPLE=6` (CPU/RAM; khớp WebAPI WorkerMaxParallel)
+
+### Lý do
+Ảnh có bib đúng roster vẫn NeedsReview vì mixed noise; 3 band × N người làm scan chậm trên CPU.
+
+---
+
 ## 2026-10-09 — Setup scripts English/ASCII (teammate encoding fix)
 
 ### Sửa
