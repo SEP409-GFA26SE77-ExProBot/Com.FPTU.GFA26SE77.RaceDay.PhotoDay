@@ -8,6 +8,7 @@ Orchestrator (1 ảnh = 1 job):
 
 from __future__ import annotations
 
+import asyncio
 import io
 import time
 
@@ -43,11 +44,20 @@ def get_detector() -> PersonDetector:
     return _detector
 
 
+_http: httpx.AsyncClient | None = None
+
+
+def _http_client() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=60.0)
+    return _http
+
+
 async def fetch_image(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
+    resp = await _http_client().get(url)
+    resp.raise_for_status()
+    return resp.content
 
 
 async def run_pipeline(
@@ -73,6 +83,32 @@ async def _run(
 
     try:
         data = image_bytes if image_bytes is not None else await _load_bytes(req)
+    except Exception as exc:
+        return _result(req, OcrJobStatus.failed, t0, reasons=[f"decode_or_fetch_error:{type(exc).__name__}"])
+
+    # CPU-bound (YOLO/Paddle/blur) off event loop — MAX_INFLIGHT mới song song thật.
+    return await asyncio.to_thread(
+        _run_cpu_bound,
+        req,
+        settings,
+        data,
+        t0,
+        thr_auto,
+        thr_review,
+        flags,
+    )
+
+
+def _run_cpu_bound(
+    req: CreateOcrJobRequest,
+    settings: Settings,
+    data: bytes,
+    t0: float,
+    thr_auto: float,
+    thr_review: float,
+    flags: list[str],
+) -> OcrJobResult:
+    try:
         image = Image.open(io.BytesIO(data))
         image.load()
     except Exception as exc:
@@ -97,6 +133,7 @@ async def _run(
         )
 
     pre = preprocess(image, max_side=settings.max_image_side)
+    flags = list(flags)
     flags.extend(pre.flags)
     blur_var = None
     if not req.options.skip_blur_gate:
@@ -116,7 +153,6 @@ async def _run(
     candidates, yolo_meta = _ocr_on_rois(pre.image, settings)
     flags.extend(yolo_meta.get("flags", []))
 
-    # Keep roster strings as WebAPI issued them (prefix+D4); classify resolves OCR → roster.
     roster = {(b or "").strip().upper() for b in req.roster_bibs if b and str(b).strip()}
     classified = classify(
         candidates,
