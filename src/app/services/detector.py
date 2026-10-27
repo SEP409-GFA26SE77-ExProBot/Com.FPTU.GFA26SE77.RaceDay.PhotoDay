@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -13,6 +14,8 @@ from app.core.device import resolve_device
 
 logger = logging.getLogger(__name__)
 _PERSON_CLASS_ID = 0  # COCO person
+# YOLO model không thread-safe; lock riêng để overlap với Paddle (CPU) khi MAX_INFLIGHT>1.
+_yolo_lock = threading.Lock()
 
 
 @dataclass
@@ -103,14 +106,17 @@ class PersonDetector:
             device=self._device,
             verbose=False,
         )
+        arr = np.asarray(image.convert("RGB"))
         try:
-            results = self._model.predict(np.asarray(image.convert("RGB")), **predict_kw)
+            with _yolo_lock:
+                results = self._model.predict(arr, **predict_kw)
         except Exception as exc:
             if self._device != "cpu":
                 logger.warning("YOLO predict on %s failed (%s) — fallback CPU", self._device, exc)
                 self._device = "cpu"
                 predict_kw["device"] = "cpu"
-                results = self._model.predict(np.asarray(image.convert("RGB")), **predict_kw)
+                with _yolo_lock:
+                    results = self._model.predict(arr, **predict_kw)
             else:
                 raise
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
@@ -139,7 +145,11 @@ class PersonDetector:
                     min(float(h), y2),
                 ]
             )
-            for band, box in _bib_bands(x1, y1, x2, y2, w, h, pad_ratio=settings.yolo_torso_pad):
+            for band, box in _bib_bands(
+                x1, y1, x2, y2, w, h,
+                pad_ratio=settings.yolo_torso_pad,
+                enabled=_enabled_bands(settings.yolo_bib_bands),
+            ):
                 crop = image.crop((box[0], box[1], box[2], box[3]))
                 if crop.size[0] < 16 or crop.size[1] < 16:
                     continue
@@ -155,6 +165,11 @@ class PersonDetector:
         return DetectResult(rois=rois, person_count=person_count, person_boxes=person_boxes)
 
 
+def _enabled_bands(raw: str | None) -> set[str]:
+    names = {p.strip().lower() for p in (raw or "").split(",") if p.strip()}
+    return names or {"chest", "waist", "hips"}
+
+
 def _bib_bands(
     x1: float,
     y1: float,
@@ -164,12 +179,16 @@ def _bib_bands(
     img_h: int,
     *,
     pad_ratio: float,
+    enabled: set[str] | None = None,
 ) -> list[tuple[str, list[float]]]:
     """Chest / waist / hips bands relative to person box (bib may sit on shorts)."""
     bw, bh = x2 - x1, y2 - y1
     specs = (("chest", 0.10, 0.66), ("waist", 0.35, 0.82), ("hips", 0.55, 0.95))
+    allow = enabled or {"chest", "waist", "hips"}
     out: list[tuple[str, list[float]]] = []
     for name, top_r, bot_r in specs:
+        if name not in allow:
+            continue
         ty1, ty2 = y1 + bh * top_r, y1 + bh * bot_r
         tx1, tx2 = x1 + bw * 0.05, x2 - bw * 0.05
         pad_x, pad_y = bw * pad_ratio, bh * pad_ratio

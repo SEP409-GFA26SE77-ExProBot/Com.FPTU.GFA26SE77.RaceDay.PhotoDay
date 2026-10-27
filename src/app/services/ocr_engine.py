@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,6 +18,8 @@ os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 logger = logging.getLogger(__name__)
+# Paddle predict không thread-safe; lock riêng — YOLO (CUDA) vẫn chạy song song được.
+_paddle_lock = threading.Lock()
 
 
 @dataclass
@@ -126,7 +129,8 @@ class OcrEngine:
             return [OcrCandidate(bib_raw="A0042", confidence=0.97, bbox=[10, 20, 120, 80])]
 
         arr = np.asarray(image.convert("RGB"))
-        results = self._paddle.predict(arr)
+        with _paddle_lock:
+            results = self._paddle.predict(arr)
         return self._parse_predict(results)
 
     def _parse_predict(self, results) -> list[OcrCandidate]:

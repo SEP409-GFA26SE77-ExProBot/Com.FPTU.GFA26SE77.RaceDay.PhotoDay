@@ -28,9 +28,10 @@ class Settings(BaseSettings):
     threshold_review_min: float = 0.50
     near_dup_hamming_max: int = 5
     blur_min_variance: float = 40.0
-    max_image_side: int = 1600
-    # 2 = BR-PERF default; giữ ≤2 trên CPU (YOLO+Paddle chung process). GPU mới cân nhắc 3–4.
-    max_inflight: int = 2
+    # 1280 = nhanh hơn 1600 trên Paddle CPU; bib marathon vẫn đọc được sau YOLO crop.
+    max_image_side: int = 1280
+    # 3: overlap fetch+YOLO(CUDA) trong lúc Paddle(CPU) bận (lock riêng). Đừng >4 trên laptop 6GB VRAM.
+    max_inflight: int = 3
     # BIB digit length: 3–6 covers fun-run 3 số + marathon 4–6. 1–2 digits = nhiều nhiễu.
     bib_min_digits: int = 3
     bib_max_digits: int = 6
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
 
     ocr_det_model: str = "PP-OCRv5_mobile_det"
     ocr_rec_model: str = "en_PP-OCRv5_mobile_rec"
-    ocr_det_limit_side_len: int = 1280
+    ocr_det_limit_side_len: int = 960
     ocr_warmup_on_start: bool = True
     ocr_mock: bool = False
     # auto | cpu | cuda — VPS không GPU: để auto (fallback CPU, không crash).
@@ -50,14 +51,16 @@ class Settings(BaseSettings):
     yolo_conf: float = 0.25
     # Higher IoU keep-threshold → giữ box chồng (người bị che một phần).
     yolo_iou: float = 0.88
-    # Cap người/ảnh; crowd marathon thường >6 — occluded mid-pack dễ bị cắt.
-    yolo_max_people: int = 10
+    # Cap người/ảnh; 8 đủ hầu hết frame (10 = nhiều Paddle call thừa).
+    yolo_max_people: int = 8
     yolo_torso_pad: float = 0.08
     # Empty = follow ocr_device. Override if YOLO CUDA nhưng Paddle CPU-only wheel.
     yolo_device: str = ""
     ocr_fullframe_fallback: bool = False
-    # Nếu chest/waist/hips không ra bib → OCR thêm 1 crop full-person (không full-frame ảnh).
+    # Nếu chest/waist không ra bib → OCR thêm 1 crop full-person (không full-frame ảnh).
     yolo_person_full_retry: bool = True
+    # Bands OCR theo thứ tự; early-exit khi hit bib. Bỏ hips = ít Paddle hơn (bib quần ngắn có thể miss).
+    yolo_bib_bands: str = "chest,waist,hips"
 
     host: str = "0.0.0.0"
     port: int = 8089
